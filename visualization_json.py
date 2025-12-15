@@ -15,6 +15,3 @@ for data in table:
         [x1, y1], [x2, y2] = line['points']
         cv2.line(scheme, (x1, y1), (x2, y2), (0, 0, 255), 1)
     cv2.imwrite('{}/{}'.format(scheme_folder, data['meta']['source'].split('/')[-1]), scheme)
-    '''cv2.imshow('Detected scheme', scheme)
-    cv2.waitKey(0)
-cv2.destroyAllWindows()'''
