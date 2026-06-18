@@ -1,8 +1,9 @@
+import io
 import cv2
 import numpy as np
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.responses import JSONResponse, HTMLResponse, StreamingResponse
 
 app = FastAPI(
     title="Floor Plan Wall Extractor",
@@ -108,14 +109,15 @@ HTML_PAGE = """<!DOCTYPE html>
 
   /* ── MAIN LAYOUT ── */
   main {
-    max-width: 1200px;
+    max-width: 1280px;
     margin: 0 auto;
     padding: 40px 24px 60px;
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 420px 1fr;
     gap: 28px;
+    align-items: start;
   }
-  @media (max-width: 860px) {
+  @media (max-width: 900px) {
     main { grid-template-columns: 1fr; }
   }
 
@@ -154,7 +156,7 @@ HTML_PAGE = """<!DOCTYPE html>
   #dropzone {
     border: 2px dashed var(--concrete-light);
     border-radius: 10px;
-    padding: 48px 24px;
+    padding: 40px 20px;
     text-align: center;
     cursor: pointer;
     transition: all 0.2s;
@@ -168,21 +170,19 @@ HTML_PAGE = """<!DOCTYPE html>
     position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%;
   }
   .drop-icon {
-    width: 64px; height: 64px;
-    margin: 0 auto 16px;
+    width: 60px; height: 60px;
+    margin: 0 auto 14px;
     background: var(--concrete-light);
     border-radius: 50%;
     display: flex; align-items: center; justify-content: center;
   }
-  .drop-icon svg { width: 32px; height: 32px; fill: var(--orange); }
-  #dropzone p.label {
-    font-size: 16px; font-weight: 600; color: var(--text); margin-bottom: 6px;
-  }
-  #dropzone p.sub { font-size: 13px; color: var(--text-dim); }
+  .drop-icon svg { width: 30px; height: 30px; fill: var(--orange); }
+  #dropzone p.label { font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 5px; }
+  #dropzone p.sub { font-size: 12px; color: var(--text-dim); }
 
-  /* ── PREVIEW ── */
+  /* ── LEFT PREVIEW ── */
   #preview-wrap {
-    margin-top: 20px;
+    margin-top: 18px;
     display: none;
     border: 1px solid var(--border);
     border-radius: 8px;
@@ -190,23 +190,23 @@ HTML_PAGE = """<!DOCTYPE html>
     position: relative;
   }
   #preview-wrap img {
-    width: 100%; display: block; max-height: 300px; object-fit: contain;
+    width: 100%; display: block; max-height: 260px; object-fit: contain;
     background: #111;
   }
   .preview-badge {
-    position: absolute; top: 10px; left: 10px;
-    background: rgba(0,0,0,0.7);
+    position: absolute; top: 8px; left: 8px;
+    background: rgba(0,0,0,0.75);
     border: 1px solid var(--orange);
-    border-radius: 6px;
-    padding: 4px 10px;
-    font-size: 12px;
+    border-radius: 5px;
+    padding: 3px 9px;
+    font-size: 11px;
     color: var(--orange);
     font-weight: 600;
   }
 
   /* ── BUTTON ── */
   #analyze-btn {
-    margin-top: 20px;
+    margin-top: 18px;
     width: 100%;
     background: var(--orange);
     color: #fff;
@@ -214,7 +214,7 @@ HTML_PAGE = """<!DOCTYPE html>
     border-radius: 8px;
     padding: 14px;
     font-family: 'Oswald', sans-serif;
-    font-size: 17px;
+    font-size: 16px;
     font-weight: 600;
     letter-spacing: 1.5px;
     text-transform: uppercase;
@@ -224,22 +224,23 @@ HTML_PAGE = """<!DOCTYPE html>
   }
   #analyze-btn:hover:not(:disabled) { background: var(--orange-dark); }
   #analyze-btn:active:not(:disabled) { transform: scale(0.98); }
-  #analyze-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-  #analyze-btn svg { width: 20px; height: 20px; fill: #fff; }
+  #analyze-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  #analyze-btn svg { width: 18px; height: 18px; fill: #fff; flex-shrink: 0; }
 
   /* ── SPINNER ── */
   .spinner {
-    width: 20px; height: 20px;
-    border: 3px solid rgba(255,255,255,0.3);
+    width: 18px; height: 18px;
+    border: 2.5px solid rgba(255,255,255,0.3);
     border-top-color: #fff;
     border-radius: 50%;
     animation: spin 0.7s linear infinite;
+    flex-shrink: 0;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
 
   /* ── STATUS BAR ── */
   #status-bar {
-    margin-top: 16px;
+    margin-top: 14px;
     padding: 10px 14px;
     border-radius: 8px;
     font-size: 13px;
@@ -254,40 +255,120 @@ HTML_PAGE = """<!DOCTYPE html>
   /* ── STATS ROW ── */
   #stats-row {
     display: none;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 12px;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
     margin-bottom: 16px;
   }
   .stat-card {
     background: var(--concrete-mid);
     border: 1px solid var(--border);
     border-radius: 8px;
-    padding: 14px 16px;
+    padding: 12px 14px;
   }
   .stat-card .val {
     font-family: 'Oswald', sans-serif;
-    font-size: 28px;
+    font-size: 24px;
     font-weight: 700;
     color: var(--orange);
     line-height: 1;
   }
   .stat-card .lbl {
-    font-size: 12px;
+    font-size: 11px;
     color: var(--text-dim);
     margin-top: 4px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
   }
 
-  /* ── JSON OUTPUT ── */
-  #json-output-wrap {
-    display: none;
-    flex-direction: column;
-    height: 100%;
+  /* ── TABS ── */
+  .tabs {
+    display: flex;
+    gap: 2px;
+    margin-bottom: 16px;
+    background: var(--concrete-mid);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 4px;
   }
+  .tab-btn {
+    flex: 1;
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-family: 'Oswald', sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: all 0.15s;
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  .tab-btn svg { width: 14px; height: 14px; fill: currentColor; }
+  .tab-btn.active {
+    background: var(--orange);
+    color: #fff;
+  }
+  .tab-btn:not(.active):hover { color: var(--text); }
+
+  /* ── VIZ IMAGE ── */
+  #viz-panel { display: none; }
+  #viz-loading {
+    background: #111;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    height: 300px;
+    display: flex; align-items: center; justify-content: center;
+    gap: 12px;
+    color: var(--text-dim);
+    font-size: 14px;
+  }
+  #viz-image-wrap {
+    display: none;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    position: relative;
+    background: #111;
+  }
+  #viz-image-wrap img {
+    width: 100%; display: block;
+    object-fit: contain;
+  }
+  .viz-badge {
+    position: absolute; top: 8px; left: 8px;
+    background: rgba(0,0,0,0.75);
+    border: 1px solid #E04444;
+    border-radius: 5px;
+    padding: 3px 9px;
+    font-size: 11px;
+    color: #E04444;
+    font-weight: 600;
+  }
+  #viz-download-btn {
+    margin-top: 12px;
+    background: var(--concrete-mid);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    color: var(--steel-light);
+    padding: 9px 16px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    display: flex; align-items: center; gap: 8px;
+    transition: all 0.15s;
+    width: fit-content;
+  }
+  #viz-download-btn:hover { border-color: var(--orange); color: var(--orange); }
+  #viz-download-btn svg { width: 15px; height: 15px; fill: currentColor; }
+
+  /* ── JSON PANEL ── */
+  #json-panel { display: none; flex-direction: column; }
   .json-toolbar {
     display: flex; align-items: center; gap: 8px;
-    margin-bottom: 12px;
+    margin-bottom: 10px;
   }
   .json-toolbar .tag {
     background: var(--concrete-light);
@@ -300,7 +381,6 @@ HTML_PAGE = """<!DOCTYPE html>
     text-transform: uppercase;
   }
   .json-toolbar button {
-    margin-left: auto;
     background: var(--concrete-mid);
     border: 1px solid var(--border);
     border-radius: 6px;
@@ -311,43 +391,40 @@ HTML_PAGE = """<!DOCTYPE html>
     display: flex; align-items: center; gap: 6px;
     transition: all 0.15s;
   }
+  .json-toolbar button:last-child { margin-left: auto; }
   .json-toolbar button:hover { border-color: var(--orange); color: var(--orange); }
-  .json-toolbar button svg { width: 14px; height: 14px; fill: currentColor; }
+  .json-toolbar button svg { width: 13px; height: 13px; fill: currentColor; }
 
   #json-box {
-    flex: 1;
     background: #111;
     border: 1px solid var(--border);
     border-radius: 8px;
     padding: 16px;
     overflow: auto;
     font-family: 'Courier New', monospace;
-    font-size: 13px;
+    font-size: 12.5px;
     line-height: 1.6;
     color: #C9D1D9;
-    max-height: 480px;
+    max-height: 520px;
     white-space: pre;
   }
-  /* syntax colors */
-  .j-key   { color: #79C0FF; }
-  .j-str   { color: #A5D6FF; }
-  .j-num   { color: #F8A950; }
-  .j-bool  { color: #E4885C; }
-  .j-null  { color: #888; }
-  .j-punc  { color: #666; }
+  .j-key  { color: #79C0FF; }
+  .j-str  { color: #A5D6FF; }
+  .j-num  { color: #F8A950; }
+  .j-bool { color: #E4885C; }
+  .j-null { color: #888; }
 
   /* ── EMPTY STATE ── */
   #empty-state {
-    height: 100%;
+    padding: 60px 40px;
     display: flex; flex-direction: column;
     align-items: center; justify-content: center;
-    padding: 40px;
     color: var(--text-dim);
     text-align: center;
-    gap: 12px;
+    gap: 14px;
   }
   #empty-state svg { width: 56px; height: 56px; fill: var(--concrete-light); }
-  #empty-state p { font-size: 14px; line-height: 1.6; }
+  #empty-state p { font-size: 14px; line-height: 1.7; }
 
   /* ── FOOTER ── */
   footer {
@@ -373,13 +450,15 @@ HTML_PAGE = """<!DOCTYPE html>
 <div class="hero-stripe"></div>
 
 <main>
-  <!-- LEFT: Upload -->
+
+  <!-- ═══ LEFT: Upload ═══ -->
   <div class="card">
     <div class="card-header">
       <div class="dot"></div>
       <span class="card-title">Загрузка схемы</span>
     </div>
     <div class="card-body">
+
       <div id="dropzone">
         <input type="file" id="file-input" accept="image/png,image/jpeg,image/bmp,image/tiff"/>
         <div class="drop-icon">
@@ -390,60 +469,102 @@ HTML_PAGE = """<!DOCTYPE html>
       </div>
 
       <div id="preview-wrap">
-        <span class="preview-badge">СХЕМА</span>
+        <span class="preview-badge">ОРИГИНАЛ</span>
         <img id="preview-img" src="" alt="preview"/>
       </div>
 
       <button id="analyze-btn" disabled>
-        <svg viewBox="0 0 24 24"><path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v18m0 0h10a2 2 0 0 0 2-2V9M9 21H5a2 2 0 0 1-2-2V9m0 0h18"/></svg>
+        <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
         Анализировать стены
       </button>
 
       <div id="status-bar"></div>
+
     </div>
   </div>
 
-  <!-- RIGHT: Result -->
+  <!-- ═══ RIGHT: Results ═══ -->
   <div class="card">
     <div class="card-header">
       <div class="dot"></div>
-      <span class="card-title">Результат — JSON</span>
+      <span class="card-title">Результат анализа</span>
     </div>
-    <div class="card-body" style="display:flex;flex-direction:column;height:calc(100% - 53px);">
+    <div class="card-body">
 
-      <div id="stats-row">
-        <div class="stat-card">
-          <div class="val" id="stat-walls">—</div>
-          <div class="lbl">Сегментов стен</div>
-        </div>
-        <div class="stat-card">
-          <div class="val" id="stat-file">—</div>
-          <div class="lbl">Файл</div>
-        </div>
-      </div>
-
+      <!-- Empty state -->
       <div id="empty-state">
-        <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 1.5L18.5 9H13V3.5zM8 13h8v1H8v-1zm0 3h5v1H8v-1zm0-6h2v1H8v-1z"/></svg>
-        <p>Загрузите изображение схемы<br/>и нажмите «Анализировать стены»<br/>— здесь появится JSON с координатами</p>
+        <svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14l-5-5 1.41-1.41L12 14.17l7.59-7.59L21 8l-9 9z" opacity=".3"/><path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>
+        <p>Загрузите изображение схемы<br/>и нажмите «Анализировать стены»<br/>— здесь появится визуализация стен и JSON</p>
       </div>
 
-      <div id="json-output-wrap">
-        <div class="json-toolbar">
-          <span class="tag">application/json</span>
-          <button id="copy-btn" onclick="copyJson()">
-            <svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
-            Копировать
+      <!-- Results (hidden until analysis) -->
+      <div id="results-wrap" style="display:none;">
+
+        <!-- Stats -->
+        <div id="stats-row">
+          <div class="stat-card">
+            <div class="val" id="stat-walls">—</div>
+            <div class="lbl">Сегментов стен</div>
+          </div>
+          <div class="stat-card">
+            <div class="val" id="stat-file">—</div>
+            <div class="lbl">Файл</div>
+          </div>
+          <div class="stat-card">
+            <div class="val" id="stat-status">✓</div>
+            <div class="lbl">Статус</div>
+          </div>
+        </div>
+
+        <!-- Tabs -->
+        <div class="tabs">
+          <button class="tab-btn active" id="tab-viz" onclick="switchTab('viz')">
+            <svg viewBox="0 0 24 24"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
+            Визуализация
           </button>
-          <button onclick="downloadJson()">
-            <svg viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
-            Скачать
+          <button class="tab-btn" id="tab-json" onclick="switchTab('json')">
+            <svg viewBox="0 0 24 24"><path d="M9.4 16.6L4.8 12l4.6-4.6L8 6l-6 6 6 6 1.4-1.4zm5.2 0l4.6-4.6-4.6-4.6L16 6l6 6-6 6-1.4-1.4z"/></svg>
+            JSON
           </button>
         </div>
-        <div id="json-box"></div>
-      </div>
+
+        <!-- Viz tab -->
+        <div id="viz-panel">
+          <div id="viz-loading">
+            <div class="spinner" style="border-color:rgba(245,130,10,0.3);border-top-color:var(--orange);"></div>
+            Строю визуализацию…
+          </div>
+          <div id="viz-image-wrap">
+            <span class="viz-badge">СТЕНЫ ОБНАРУЖЕНЫ</span>
+            <img id="viz-img" src="" alt="visualization"/>
+          </div>
+          <button id="viz-download-btn" onclick="downloadViz()" style="display:none;">
+            <svg viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+            Скачать аннотированную схему
+          </button>
+        </div>
+
+        <!-- JSON tab -->
+        <div id="json-panel">
+          <div class="json-toolbar">
+            <span class="tag">application/json</span>
+            <button id="copy-btn" onclick="copyJson()">
+              <svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+              Копировать
+            </button>
+            <button onclick="downloadJson()">
+              <svg viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+              Скачать .json
+            </button>
+          </div>
+          <div id="json-box"></div>
+        </div>
+
+      </div><!-- /results-wrap -->
 
     </div>
   </div>
+
 </main>
 
 <footer>
@@ -452,18 +573,25 @@ HTML_PAGE = """<!DOCTYPE html>
 
 <script>
   let currentJson = null;
-  const dropzone = document.getElementById('dropzone');
-  const fileInput = document.getElementById('file-input');
-  const analyzeBtn = document.getElementById('analyze-btn');
-  const previewWrap = document.getElementById('preview-wrap');
-  const previewImg = document.getElementById('preview-img');
-  const statusBar = document.getElementById('status-bar');
-  const emptyState = document.getElementById('empty-state');
-  const jsonOutputWrap = document.getElementById('json-output-wrap');
-  const jsonBox = document.getElementById('json-box');
-  const statsRow = document.getElementById('stats-row');
+  let vizBlobUrl = null;
+  let currentTab = 'viz';
 
-  /* drag & drop */
+  const dropzone    = document.getElementById('dropzone');
+  const fileInput   = document.getElementById('file-input');
+  const analyzeBtn  = document.getElementById('analyze-btn');
+  const previewWrap = document.getElementById('preview-wrap');
+  const previewImg  = document.getElementById('preview-img');
+  const statusBar   = document.getElementById('status-bar');
+  const emptyState  = document.getElementById('empty-state');
+  const resultsWrap = document.getElementById('results-wrap');
+  const statsRow    = document.getElementById('stats-row');
+  const jsonBox     = document.getElementById('json-box');
+  const vizLoading  = document.getElementById('viz-loading');
+  const vizImageWrap= document.getElementById('viz-image-wrap');
+  const vizImg      = document.getElementById('viz-img');
+  const vizDlBtn    = document.getElementById('viz-download-btn');
+
+  /* ── Drag & drop ── */
   dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('dragover'); });
   dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
   dropzone.addEventListener('drop', e => {
@@ -475,12 +603,16 @@ HTML_PAGE = """<!DOCTYPE html>
   function handleFile() {
     const file = fileInput.files[0];
     if (!file) return;
+    if (vizBlobUrl) { URL.revokeObjectURL(vizBlobUrl); vizBlobUrl = null; }
     previewImg.src = URL.createObjectURL(file);
     previewWrap.style.display = 'block';
     analyzeBtn.disabled = false;
     hideStatus();
+    emptyState.style.display = 'flex';
+    resultsWrap.style.display = 'none';
   }
 
+  /* ── Analyze ── */
   analyzeBtn.addEventListener('click', async () => {
     const file = fileInput.files[0];
     if (!file) return;
@@ -489,60 +621,98 @@ HTML_PAGE = """<!DOCTYPE html>
     analyzeBtn.innerHTML = '<div class="spinner"></div> Обработка…';
     hideStatus();
     emptyState.style.display = 'none';
-    jsonOutputWrap.style.display = 'none';
-    statsRow.style.display = 'none';
+    resultsWrap.style.display = 'none';
 
     const form = new FormData();
     form.append('file', file);
 
     try {
-      const res = await fetch('/api/v1/process', { method: 'POST', body: form });
-      const data = await res.json();
-      if (!res.ok) {
+      /* fire both requests in parallel */
+      const [jsonRes, vizRes] = await Promise.all([
+        fetch('/api/v1/process',   { method: 'POST', body: form }),
+        fetch('/api/v1/visualize', { method: 'POST', body: (() => { const f2 = new FormData(); f2.append('file', file); return f2; })() })
+      ]);
+
+      const data = await jsonRes.json();
+
+      if (!jsonRes.ok) {
         showStatus('err', data.detail || 'Ошибка сервера');
+        emptyState.style.display = 'flex';
       } else {
         currentJson = data;
-        renderResult(data);
-        showStatus('ok', `Успешно обработано: обнаружено ${data.wall_count} сегментов стен`);
+        renderStats(data);
+        renderJson(data);
+
+        /* visualize */
+        if (vizRes.ok) {
+          const blob = await vizRes.blob();
+          if (vizBlobUrl) URL.revokeObjectURL(vizBlobUrl);
+          vizBlobUrl = URL.createObjectURL(blob);
+          vizImg.src = vizBlobUrl;
+          vizLoading.style.display = 'none';
+          vizImageWrap.style.display = 'block';
+          vizDlBtn.style.display = 'flex';
+        } else {
+          vizLoading.innerHTML = '<span style="color:var(--text-dim)">Визуализация недоступна</span>';
+        }
+
+        resultsWrap.style.display = 'block';
+        switchTab('viz');
+        showStatus('ok', `Обнаружено ${data.wall_count.toLocaleString('ru')} сегментов стен`);
       }
     } catch (e) {
       showStatus('err', 'Ошибка соединения: ' + e.message);
+      emptyState.style.display = 'flex';
     }
 
     analyzeBtn.disabled = false;
-    analyzeBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v18m0 0h10a2 2 0 0 0 2-2V9M9 21H5a2 2 0 0 1-2-2V9m0 0h18"/></svg> Анализировать стены';
+    analyzeBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="#fff"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg> Анализировать стены';
   });
 
-  function renderResult(data) {
-    document.getElementById('stat-walls').textContent = data.wall_count.toLocaleString('ru');
-    document.getElementById('stat-file').textContent = truncate(data.filename, 14);
-    statsRow.style.display = 'grid';
-    jsonBox.innerHTML = syntaxHighlight(JSON.stringify(data, null, 2));
-    jsonOutputWrap.style.display = 'flex';
+  /* ── Tabs ── */
+  function switchTab(name) {
+    currentTab = name;
+    document.getElementById('tab-viz').classList.toggle('active', name === 'viz');
+    document.getElementById('tab-json').classList.toggle('active', name === 'json');
+    document.getElementById('viz-panel').style.display  = name === 'viz'  ? 'block' : 'none';
+    document.getElementById('json-panel').style.display = name === 'json' ? 'flex'  : 'none';
   }
 
-  function truncate(s, n) { return s && s.length > n ? s.slice(0, n) + '…' : s; }
+  /* ── Render ── */
+  function renderStats(data) {
+    document.getElementById('stat-walls').textContent = data.wall_count.toLocaleString('ru');
+    document.getElementById('stat-file').textContent  = truncate(data.filename, 10);
+    document.getElementById('stat-status').textContent = 'OK';
+    statsRow.style.display = 'grid';
+    /* reset viz panel */
+    vizLoading.style.display = 'flex';
+    vizImageWrap.style.display = 'none';
+    vizDlBtn.style.display = 'none';
+  }
+
+  function renderJson(data) {
+    jsonBox.innerHTML = syntaxHighlight(JSON.stringify(data, null, 2));
+  }
+
+  function truncate(s, n) { return s && s.length > n ? s.slice(0, n) + '…' : (s || '—'); }
 
   function showStatus(type, msg) {
+    const icon = type === 'ok'
+      ? '<svg width="15" height="15" fill="currentColor" viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>'
+      : '<svg width="15" height="15" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>';
     statusBar.className = type;
-    statusBar.innerHTML = (type === 'ok'
-      ? '<svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>'
-      : '<svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>'
-    ) + ' ' + msg;
+    statusBar.innerHTML = icon + ' ' + msg;
   }
   function hideStatus() { statusBar.className = ''; statusBar.innerHTML = ''; statusBar.style.display = 'none'; }
 
   function syntaxHighlight(json) {
     return json
       .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-      .replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, m => {
-        if (/^"/.test(m)) {
-          if (/:$/.test(m)) return '<span class="j-key">' + m + '</span>';
-          return '<span class="j-str">' + m + '</span>';
-        }
-        if (/true|false/.test(m)) return '<span class="j-bool">' + m + '</span>';
-        if (/null/.test(m)) return '<span class="j-null">' + m + '</span>';
-        return '<span class="j-num">' + m + '</span>';
+      .replace(/("(\\\\u[a-zA-Z0-9]{4}|\\\\[^u]|[^\\\\"])*"(\\s*:)?|\\b(true|false|null)\\b|-?\\d+(?:\\.\\d*)?(?:[eE][+\\\\-]?\\d+)?)/g, m => {
+        if (/^"/.test(m)) return /:$/.test(m) ? '<span class="j-key">'+m+'</span>' : '<span class="j-str">'+m+'</span>';
+        if (/true|false/.test(m)) return '<span class="j-bool">'+m+'</span>';
+        if (/null/.test(m)) return '<span class="j-null">'+m+'</span>';
+        return '<span class="j-num">'+m+'</span>';
       });
   }
 
@@ -551,7 +721,7 @@ HTML_PAGE = """<!DOCTYPE html>
     navigator.clipboard.writeText(JSON.stringify(currentJson, null, 2)).then(() => {
       const btn = document.getElementById('copy-btn');
       btn.textContent = '✓ Скопировано';
-      setTimeout(() => { btn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg> Копировать'; }, 2000);
+      setTimeout(() => { btn.innerHTML = '<svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg> Копировать'; }, 2000);
     });
   }
 
@@ -560,7 +730,15 @@ HTML_PAGE = """<!DOCTYPE html>
     const blob = new Blob([JSON.stringify(currentJson, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = (currentJson.filename || 'result').replace(/\.[^.]+$/, '') + '_walls.json';
+    a.download = (currentJson.filename || 'result').replace(/\\.[^.]+$/, '') + '_walls.json';
+    a.click();
+  }
+
+  function downloadViz() {
+    if (!vizBlobUrl || !currentJson) return;
+    const a = document.createElement('a');
+    a.href = vizBlobUrl;
+    a.download = (currentJson.filename || 'result').replace(/\\.[^.]+$/, '') + '_annotated.png';
     a.click();
   }
 </script>
@@ -568,40 +746,53 @@ HTML_PAGE = """<!DOCTYPE html>
 </html>"""
 
 
-def _process_image_bytes(data: bytes) -> list:
-    arr = np.frombuffer(data, np.uint8)
-    scheme = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-    if scheme is None:
-        raise ValueError("Could not decode image. Make sure you uploaded a valid PNG or JPEG.")
+# ── Core processing helpers ──────────────────────────────────────────────────
 
-    scheme = cv2.cvtColor(scheme, cv2.COLOR_BGR2GRAY)
-    _, th = cv2.threshold(scheme, 200, 255, cv2.THRESH_BINARY_INV)
+def _decode_image(data: bytes) -> np.ndarray:
+    arr = np.frombuffer(data, np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("Could not decode image. Upload a valid PNG or JPEG.")
+    return img
+
+
+def _extract_walls(img_bgr: np.ndarray, delta: int = 10) -> list:
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    _, th = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY_INV)
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
     walls = cv2.morphologyEx(th, cv2.MORPH_CLOSE, kernel)
 
     coords = []
     edges = cv2.Canny(walls, 10, 150)
     contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    delta = 10
     for contour in contours:
-        points = contour[:, 0, :]
-        n_points = len(points)
-        if n_points < 2:
+        pts = contour[:, 0, :]
+        n = len(pts)
+        if n < 2:
             continue
-        for i in range(n_points - 1):
-            x0, y0 = points[i]
-            x1, y1 = points[i + 1]
-            dist = float(np.sqrt((x1 - x0) ** 2 + (y1 - y0) ** 2))
-            if dist >= delta:
+        for i in range(n - 1):
+            x0, y0 = pts[i]
+            x1, y1 = pts[i + 1]
+            if float(np.sqrt((x1-x0)**2 + (y1-y0)**2)) >= delta:
                 coords.append([[int(x0), int(y0)], [int(x1), int(y1)]])
-        if n_points > 2:
-            x0, y0 = points[-1]
-            x1, y1 = points[0]
-            dist = float(np.sqrt((x1 - x0) ** 2 + (y1 - y0) ** 2))
-            if dist >= delta:
+        if n > 2:
+            x0, y0 = pts[-1]
+            x1, y1 = pts[0]
+            if float(np.sqrt((x1-x0)**2 + (y1-y0)**2)) >= delta:
                 coords.append([[int(x0), int(y0)], [int(x1), int(y1)]])
     return coords
 
+
+def _validate_upload(file: UploadFile) -> None:
+    allowed = {"image/png", "image/jpeg", "image/jpg", "image/bmp", "image/tiff"}
+    if file.content_type and file.content_type not in allowed:
+        raise HTTPException(
+            status_code=415,
+            detail=f"Unsupported media type '{file.content_type}'. Upload PNG or JPEG.",
+        )
+
+
+# ── Routes ───────────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 def index():
@@ -615,34 +806,50 @@ def health_check():
 
 @app.post(
     "/api/v1/process",
-    summary="Process a floor plan image",
-    description=(
-        "Upload a floor plan image (PNG, JPG, BMP, TIFF) and receive a list of "
-        "detected wall segments as pairs of [x, y] coordinate points."
-    ),
+    summary="Extract wall coordinates",
+    description="Upload a floor plan image and receive detected wall segments as [x,y] pairs.",
 )
 async def process_floor_plan(file: UploadFile = File(...)):
-    allowed = {"image/png", "image/jpeg", "image/jpg", "image/bmp", "image/tiff"}
-    if file.content_type and file.content_type not in allowed:
-        raise HTTPException(
-            status_code=415,
-            detail=f"Unsupported media type '{file.content_type}'. Upload a PNG or JPEG.",
-        )
-
+    _validate_upload(file)
     data = await file.read()
     if not data:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-
     try:
-        coords = _process_image_bytes(data)
+        img = _decode_image(data)
+        coords = _extract_walls(img)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
-    walls = [{"id": f"w{i + 1}", "points": pts} for i, pts in enumerate(coords)]
-    return JSONResponse(
-        content={
-            "filename": file.filename,
-            "wall_count": len(walls),
-            "walls": walls,
-        }
-    )
+    walls = [{"id": f"w{i+1}", "points": pts} for i, pts in enumerate(coords)]
+    return JSONResponse(content={"filename": file.filename, "wall_count": len(walls), "walls": walls})
+
+
+@app.post(
+    "/api/v1/visualize",
+    summary="Return annotated floor plan image",
+    description=(
+        "Upload a floor plan image and receive a PNG with detected wall segments "
+        "drawn as red lines over the original image."
+    ),
+    response_class=StreamingResponse,
+)
+async def visualize_floor_plan(file: UploadFile = File(...)):
+    _validate_upload(file)
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    try:
+        img = _decode_image(data)
+        coords = _extract_walls(img)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    annotated = img.copy()
+    for (x1, y1), (x2, y2) in coords:
+        cv2.line(annotated, (x1, y1), (x2, y2), (0, 0, 220), 2)
+
+    ok, buf = cv2.imencode(".png", annotated)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to encode output image.")
+
+    return StreamingResponse(io.BytesIO(buf.tobytes()), media_type="image/png")
